@@ -16,9 +16,11 @@ class User:
         self.license_number = license_number
         self.role = role
         self.reservations = []
-    
+
     def __str__(self) -> str:
-        reservations_str = '\n--------------------\n'.join(str(r) for r in self.reservations)
+        reservations_str = "\n--------------------\n".join(
+            str(r) for r in self.reservations
+        )
         return f"User ID: {self.id}\nName: {self.name}\nEmail: {self.email}\nLicense Number: {self.license_number}\nRole: {self.role}\nReservations:\n--------------------\n{reservations_str}"
 
     def login(self, email, password) -> bool:
