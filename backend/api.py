@@ -6,10 +6,10 @@ from typing import Dict, List, Optional
 from datetime import date
 
 # Import backends classes
-from user import User
-from reservation import Reservation
-from car import Car
-from admin import Admin  # for future use
+from .user import User
+from .reservation import Reservation
+from .car import Car
+from .admin import Admin  # for future use
 
 app = FastAPI(title="Car Rental API", version="0.1")
 
