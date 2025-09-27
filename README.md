@@ -3,7 +3,7 @@
 ## Run Backend
 ```bash
 pip install fastapi "uvicorn[standard]"
-uvicorn api:app --reload --host 127.0.0.1 --port 8000
+uvicorn backend.api:app --reload --host 127.0.0.1 --port 8000
 ```
 
 ## Run Frontend
