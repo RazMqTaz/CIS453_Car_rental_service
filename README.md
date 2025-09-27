@@ -9,7 +9,7 @@ uvicorn backend.api:app --reload --host 127.0.0.1 --port 8000
 ## Run Frontend
 ```bash
 pip install streamlit requests
-streamlit run streamlit_frontend.py
+streamlit run frontend/streamlit_frontend.py
 ```
 
 ## Features (Week 3)
