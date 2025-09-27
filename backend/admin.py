@@ -1,5 +1,5 @@
-from reservation import Reservation
-from user import User
+from .reservation import Reservation
+from .user import User
 
 class Admin(User):
     def __init__(self, user_id: int, name: str, email: str, license_number: str) -> None:
