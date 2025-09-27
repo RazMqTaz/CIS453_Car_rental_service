@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -24,16 +23,23 @@ app.add_middleware(
 
 # In memory stores (prototype)
 
+
 class UserStore:
     def __init__(self) -> None:
-        self._users: Dict[str, Dict[str, object]] = {}  # email -> {"user": User, "pw": str}
+        self._users: Dict[str, Dict[str, object]] = (
+            {}
+        )  # email -> {"user": User, "pw": str}
         self._id_seq = 1
 
-    def register(self, name: str, email: str, license_number: str, password: str) -> User:
+    def register(
+        self, name: str, email: str, license_number: str, password: str
+    ) -> User:
         key = email.strip().lower()
         if key in self._users:
             raise ValueError("Email already registered")
-        u = User(user_id=self._id_seq, name=name, email=email, license_number=license_number)
+        u = User(
+            user_id=self._id_seq, name=name, email=email, license_number=license_number
+        )
         self._id_seq += 1
         self._users[key] = {"user": u, "pw": password}
         return u
@@ -48,7 +54,10 @@ class UserStore:
     def get_by_id(self, user_id: int) -> Optional[User]:
         for rec in self._users.values():
             u = rec["user"]
-            if isinstance(u, User) and getattr(u, "id", getattr(u, "user_id", None)) == user_id:
+            if (
+                isinstance(u, User)
+                and getattr(u, "id", getattr(u, "user_id", None)) == user_id
+            ):
                 return u
         return None
 
@@ -115,17 +124,19 @@ def seed():
         (101, "Toyota", "Corolla", 2021, "available", "Economy"),
         (102, "Honda", "Civic", 2022, "available", "Economy"),
         (201, "Toyota", "Camry", 2021, "available", "Sedan"),
-        (202, "Nissan", "Altima", 2023, "reserved",  "Sedan"),
+        (202, "Nissan", "Altima", 2023, "reserved", "Sedan"),
         (301, "Honda", "CR-V", 2020, "available", "SUV"),
         (302, "Toyota", "RAV4", 2024, "available", "SUV"),
     ]
     for cid, make, model, year, status, cat in data:
         FLEET.add(Car(cid, make, model, year, status), cat)
 
+
 seed()
 
 
 # Pydantic I/O models (thin)
+
 
 class RegisterIn(BaseModel):
     name: str
@@ -133,15 +144,17 @@ class RegisterIn(BaseModel):
     license_number: str
     password: str
 
+
 class LoginIn(BaseModel):
     email: str
     password: str
+
 
 class BookIn(BaseModel):
     car_id: int
     user_id: int
     start_date: str  # "YYYY-MM-DD"
-    end_date: str    # "YYYY-MM-DD"
+    end_date: str  # "YYYY-MM-DD"
 
 
 def user_to_dict(u: User) -> Dict[str, object]:
@@ -153,6 +166,7 @@ def user_to_dict(u: User) -> Dict[str, object]:
         "license_number": getattr(u, "license_number", ""),
     }
 
+
 def car_to_dict(c: Car) -> Dict[str, object]:
     return {
         "id": c.id,
@@ -162,6 +176,7 @@ def car_to_dict(c: Car) -> Dict[str, object]:
         "status": c.status,
         "category": FLEET.category.get(c.id, ""),
     }
+
 
 def res_to_dict(r: Reservation) -> Dict[str, object]:
     return {
@@ -173,16 +188,19 @@ def res_to_dict(r: Reservation) -> Dict[str, object]:
     }
 
 
-
 # Endpoints
+
 
 @app.post("/api/register")
 def api_register(payload: RegisterIn):
     try:
-        u = USERS.register(payload.name, payload.email, payload.license_number, payload.password)
+        u = USERS.register(
+            payload.name, payload.email, payload.license_number, payload.password
+        )
         return {"ok": True, "user": user_to_dict(u)}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 @app.post("/api/login")
 def api_login(payload: LoginIn):
@@ -191,10 +209,12 @@ def api_login(payload: LoginIn):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return {"ok": True, "user": user_to_dict(u)}
 
+
 @app.get("/api/cars")
 def api_cars(q: str = Query(default=""), category: str = Query(default="All")):
     cars = FLEET.search(q, category)
     return [car_to_dict(c) for c in cars]
+
 
 @app.post("/api/book")
 def api_book(payload: BookIn):
@@ -237,6 +257,7 @@ def api_book(payload: BookIn):
     RES.add(r)
     FLEET.set_status(c.id, "reserved")
     return {"ok": True}
+
 
 @app.get("/api/my-reservations")
 def api_my_reservations(user_id: int = Query(...)):
