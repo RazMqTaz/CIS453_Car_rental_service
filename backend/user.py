@@ -1,4 +1,4 @@
-from reservation import Reservation
+from .reservation import Reservation
 
 
 class User:
