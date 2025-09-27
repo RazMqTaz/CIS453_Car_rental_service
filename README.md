@@ -1,9 +1,19 @@
 # Car Rental Prototype
 
-## How to Run
+## Run Backend
+```bash
+pip install fastapi "uvicorn[standard]"
+uvicorn api:app --reload --host 127.0.0.1 --port 8000
+```
 
-### 1. Backend (FastAPI)
-1. Place `api.py`, `user.py`, `car.py`, `reservation.py`, and `admin.py` in the same folder.  
-2. Install dependencies:
-   ```bash
-   pip install fastapi "uvicorn[standard]"
+## Run Frontend
+```bash
+pip install streamlit requests
+streamlit run streamlit_frontend.py
+```
+
+## Features (Week 3)
+- Register / Login
+- View cars
+- Book a car
+- View my reservations
