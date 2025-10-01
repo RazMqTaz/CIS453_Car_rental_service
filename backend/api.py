@@ -1,8 +1,11 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 from datetime import date
+from sqlalchemy.orm import Session
+from .database import get_DB
+from .models import User
 
 # Import backends classes
 from .user import User
@@ -25,41 +28,24 @@ app.add_middleware(
 
 
 class UserStore:
-    def __init__(self) -> None:
-        self._users: Dict[str, Dict[str, object]] = (
-            {}
-        )  # email -> {"user": User, "pw": str}
-        self._id_seq = 1
+    def __init__(self, db: Session):
+        self.db = db
 
-    def register(
-        self, name: str, email: str, license_number: str, password: str
-    ) -> User:
-        key = email.strip().lower()
-        if key in self._users:
+    def register(self, name: str, email: str, license_number: str, password: str) -> User:
+        if self.db.query(User).filter(User.email == email).first():
             raise ValueError("Email already registered")
-        u = User(
-            user_id=self._id_seq, name=name, email=email, license_number=license_number
-        )
-        self._id_seq += 1
-        self._users[key] = {"user": u, "pw": password}
-        return u
+        user = User(name=name, email=email, license_number=license_number, password=password)
+        self.db.add(user)
+        self.db.commit()
+        self.db.refresh(user)
+        return user
 
     def login(self, email: str, password: str) -> Optional[User]:
-        key = email.strip().lower()
-        entry = self._users.get(key)
-        if not entry or entry["pw"] != password:
-            return None
-        return entry["user"]  # type: ignore[return-value]
+        user = self.db.query(User).filter(User.email == email, User.password == password).first()
+        return user
 
     def get_by_id(self, user_id: int) -> Optional[User]:
-        for rec in self._users.values():
-            u = rec["user"]
-            if (
-                isinstance(u, User)
-                and getattr(u, "id", getattr(u, "user_id", None)) == user_id
-            ):
-                return u
-        return None
+        return self.db.query(User).filter(User.id == user_id).first()
 
 
 class FleetStore:
@@ -114,25 +100,20 @@ class ReservationStore:
         return False
 
 
-USERS = UserStore()
 FLEET = FleetStore()
 RES = ReservationStore()
 
 
-def seed():
-    data = [
-        (101, "Toyota", "Corolla", 2021, "available", "Economy"),
-        (102, "Honda", "Civic", 2022, "available", "Economy"),
-        (201, "Toyota", "Camry", 2021, "available", "Sedan"),
-        (202, "Nissan", "Altima", 2023, "reserved", "Sedan"),
-        (301, "Honda", "CR-V", 2020, "available", "SUV"),
-        (302, "Toyota", "RAV4", 2024, "available", "SUV"),
+def seed(db: Session):
+    cars = [
+        {"id": 101, "make": "Toyota", "model": "Corolla", "year": 2021, "status": "available", "location": "Economy"},
+        {"id": 102, "make": "Honda", "model": "Civic", "year": 2022, "status": "available", "location": "Economy"},
+        # Add more cars here
     ]
-    for cid, make, model, year, status, cat in data:
-        FLEET.add(Car(cid, make, model, year, status), cat)
-
-
-seed()
+    for car_data in cars:
+        car = Car(**car_data)
+        db.add(car)
+    db.commit()
 
 
 # Pydantic I/O models (thin)
@@ -192,19 +173,21 @@ def res_to_dict(r: Reservation) -> Dict[str, object]:
 
 
 @app.post("/api/register")
-def api_register(payload: RegisterIn):
+def api_register(payload: RegisterIn, db: Session = Depends(get_DB)):
+    user_store = UserStore(db)
     try:
-        u = USERS.register(
+        user = user_store.register(
             payload.name, payload.email, payload.license_number, payload.password
         )
-        return {"ok": True, "user": user_to_dict(u)}
+        return {"ok": True, "user": user_to_dict(user)}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/api/login")
-def api_login(payload: LoginIn):
-    u = USERS.login(payload.email, payload.password)
+def api_login(payload: LoginIn, db: Session = Depends(get_DB)):
+    user_store = UserStore(db)
+    u = user_store.login(payload.email, payload.password)
     if not u:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return {"ok": True, "user": user_to_dict(u)}
