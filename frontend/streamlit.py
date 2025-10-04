@@ -23,7 +23,7 @@ def api_post(path: str, payload: dict):
     return r.json()
 
 
-def api_get(path: str, params: dict | None = None):
+def api_get(path: str, params: dict):
     r = requests.get(f"{BASE_URL}{path}", params=params or {}, timeout=10)
     if not r.ok:
         try:
