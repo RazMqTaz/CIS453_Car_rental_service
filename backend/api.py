@@ -1,14 +1,18 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 from datetime import date
+from sqlalchemy.orm import Session
 
 # Import backends classes
 from .user import User
 from .reservation import Reservation
 from .car import Car
 from .admin import Admin  # for future use
+from .database import get_db, init_db
+from .db_services import DatabaseUserStore, DatabaseFleetStore, DatabaseReservationStore
+from .models import Car as DBCar
 
 app = FastAPI(title="Car Rental API", version="0.1")
 
@@ -21,105 +25,19 @@ app.add_middleware(
 )
 
 
-# In memory stores (prototype)
+# Database services (replacing in-memory stores)
+# These will be created per request using dependency injection
 
 
-class UserStore:
-    def __init__(self) -> None:
-        self._users: Dict[str, Dict[str, object]] = (
-            {}
-        )  # email -> {"user": User, "pw": str}
-        self._id_seq = 1
-
-    def register(
-        self, name: str, email: str, license_number: str, password: str
-    ) -> User:
-        key = email.strip().lower()
-        if key in self._users:
-            raise ValueError("Email already registered")
-        u = User(
-            user_id=self._id_seq, name=name, email=email, license_number=license_number
-        )
-        self._id_seq += 1
-        self._users[key] = {"user": u, "pw": password}
-        return u
-
-    def login(self, email: str, password: str) -> Optional[User]:
-        key = email.strip().lower()
-        entry = self._users.get(key)
-        if not entry or entry["pw"] != password:
-            return None
-        return entry["user"]  # type: ignore[return-value]
-
-    def get_by_id(self, user_id: int) -> Optional[User]:
-        for rec in self._users.values():
-            u = rec["user"]
-            if (
-                isinstance(u, User)
-                and getattr(u, "id", getattr(u, "user_id", None)) == user_id
-            ):
-                return u
-        return None
-
-
-class FleetStore:
-    def __init__(self) -> None:
-        self.cars: Dict[int, Car] = {}
-        self.category: Dict[int, str] = {}
-
-    def add(self, car: Car, category: str) -> None:
-        self.cars[car.id] = car
-        self.category[car.id] = category
-
-    def search(self, q: str = "", category: Optional[str] = None) -> List[Car]:
-        ql = (q or "").strip().lower()
-        out = []
-        for cid, c in self.cars.items():
-            if category and category != "All" and self.category.get(cid) != category:
-                continue
-            hay = f"{c.make} {c.model} {c.year} {cid}".lower()
-            if ql in hay:
-                out.append(c)
-        # stable sort
-        out.sort(key=lambda c: (c.make, c.model, c.year, c.id))
-        return out
-
-    def set_status(self, car_id: int, status: str) -> None:
-        if car_id in self.cars:
-            self.cars[car_id].updateStatus(status)
-
-
-class ReservationStore:
-    def __init__(self) -> None:
-        self.rows: List[Reservation] = []
-
-    def add(self, r: Reservation) -> None:
-        self.rows.append(r)
-
-    def for_user(self, user_id: int) -> List[Reservation]:
-        return [r for r in self.rows if getattr(r, "user_id", None) == user_id]
-
-    def overlaps(self, car_id: int, start: date, end: date) -> bool:
-        for r in self.rows:
-            if r.car_id != car_id:
-                continue
-            try:
-                rs = date.fromisoformat(r.start_date)
-                re = date.fromisoformat(r.end_date)
-            except Exception:
-                # if stored strings aren't ISO, skip overlap
-                continue
-            if not (end < rs or re < start):
-                return True
-        return False
-
-
-USERS = UserStore()
-FLEET = FleetStore()
-RES = ReservationStore()
-
-
-def seed():
+def seed_database(db: Session):
+    """Seed the database with initial car data"""
+    from .models import Car as DBCar
+    
+    # Check if cars already exist
+    existing_cars = db.query(DBCar).count()
+    if existing_cars > 0:
+        return  # Already seeded
+    
     data = [
         (101, "Toyota", "Corolla", 2021, "available", "Economy"),
         (102, "Honda", "Civic", 2022, "available", "Economy"),
@@ -129,10 +47,27 @@ def seed():
         (302, "Toyota", "RAV4", 2024, "available", "SUV"),
     ]
     for cid, make, model, year, status, cat in data:
-        FLEET.add(Car(cid, make, model, year, status), cat)
+        db_car = DBCar(
+            id=cid,
+            make=make,
+            model=model,
+            year=year,
+            status=status,
+            category=cat
+        )
+        db.add(db_car)
+    db.commit()
 
-
-seed()
+# Initialize database on startup
+@app.on_event("startup")
+async def startup_event():
+    init_db()
+    # Seed with initial data
+    db = next(get_db())
+    try:
+        seed_database(db)
+    finally:
+        db.close()
 
 
 # Pydantic I/O models (thin)
@@ -167,14 +102,14 @@ def user_to_dict(u: User) -> Dict[str, object]:
     }
 
 
-def car_to_dict(c: Car) -> Dict[str, object]:
+def car_to_dict(c: Car, category: str = "") -> Dict[str, object]:
     return {
         "id": c.id,
         "make": c.make,
         "model": c.model,
         "year": c.year,
         "status": c.status,
-        "category": FLEET.category.get(c.id, ""),
+        "category": category,
     }
 
 
@@ -192,9 +127,10 @@ def res_to_dict(r: Reservation) -> Dict[str, object]:
 
 
 @app.post("/api/register")
-def api_register(payload: RegisterIn):
+def api_register(payload: RegisterIn, db: Session = Depends(get_db)):
     try:
-        u = USERS.register(
+        user_store = DatabaseUserStore(db)
+        u = user_store.register(
             payload.name, payload.email, payload.license_number, payload.password
         )
         return {"ok": True, "user": user_to_dict(u)}
@@ -203,27 +139,38 @@ def api_register(payload: RegisterIn):
 
 
 @app.post("/api/login")
-def api_login(payload: LoginIn):
-    u = USERS.login(payload.email, payload.password)
+def api_login(payload: LoginIn, db: Session = Depends(get_db)):
+    user_store = DatabaseUserStore(db)
+    u = user_store.login(payload.email, payload.password)
     if not u:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return {"ok": True, "user": user_to_dict(u)}
 
 
 @app.get("/api/cars")
-def api_cars(q: str = Query(default=""), category: str = Query(default="All")):
-    cars = FLEET.search(q, category)
-    return [car_to_dict(c) for c in cars]
+def api_cars(q: str = Query(default=""), category: str = Query(default="All"), db: Session = Depends(get_db)):
+    fleet_store = DatabaseFleetStore(db)
+    cars = fleet_store.search(q, category)
+    # Get categories for each car
+    result = []
+    for c in cars:
+        car_category = fleet_store.get_category(c.id) or ""
+        result.append(car_to_dict(c, car_category))
+    return result
 
 
 @app.post("/api/book")
-def api_book(payload: BookIn):
+def api_book(payload: BookIn, db: Session = Depends(get_db)):
+    user_store = DatabaseUserStore(db)
+    fleet_store = DatabaseFleetStore(db)
+    res_store = DatabaseReservationStore(db)
+    
     # validate user
-    u = USERS.get_by_id(payload.user_id)
+    u = user_store.get_by_id(payload.user_id)
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
     # validate car
-    c = FLEET.cars.get(payload.car_id)
+    c = fleet_store.get_car(payload.car_id)
     if not c:
         raise HTTPException(status_code=404, detail="Car not found")
     if c.status != "available":
@@ -237,11 +184,11 @@ def api_book(payload: BookIn):
     if e < s:
         raise HTTPException(status_code=400, detail="End date must be >= start date")
     # overlap check
-    if RES.overlaps(c.id, s, e):
+    if res_store.overlaps(c.id, s, e):
         raise HTTPException(status_code=409, detail="Overlapping reservation")
     # create reservation
     r = Reservation(
-        vehicle_type=FLEET.category.get(c.id, "Unknown"),
+        vehicle_type=fleet_store.get_category(c.id) or "Unknown",
         car_id=c.id,
         user_id=user_to_dict(u)["id"],  # type: ignore[arg-type]
         start_date=s.isoformat(),
@@ -254,12 +201,13 @@ def api_book(payload: BookIn):
         if not hasattr(u, "reservations"):
             setattr(u, "reservations", [])
         u.reservations.append(r)  # type: ignore[attr-defined]
-    RES.add(r)
-    FLEET.set_status(c.id, "reserved")
+    res_store.add(r)
+    fleet_store.set_status(c.id, "reserved")
     return {"ok": True}
 
 
 @app.get("/api/my-reservations")
-def api_my_reservations(user_id: int = Query(...)):
-    rows = RES.for_user(user_id)
+def api_my_reservations(user_id: int = Query(...), db: Session = Depends(get_db)):
+    res_store = DatabaseReservationStore(db)
+    rows = res_store.for_user(user_id)
     return [res_to_dict(r) for r in rows]
