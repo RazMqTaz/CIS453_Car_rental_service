@@ -5,13 +5,18 @@ class Car:
         self.model = model
         self.year = year
         self.status = status
-    
+
     def __str__(self) -> str:
         return f"ID: {self.id}\nMake: {self.make}\nModel: {self.model}\nYear: {self.year}\nStatus: {self.status}"
-    
+
     def updateStatus(self, status: str) -> None:
         self.status = status
-    
+
     def getInfo(self) -> dict:
-        return {"ID:" : self.id, "Make:" : self.make, "Model" : self.model, "Year" : self.year, "Status:" : self.status}
-    
+        return {
+            "ID:": self.id,
+            "Make:": self.make,
+            "Model": self.model,
+            "Year": self.year,
+            "Status:": self.status,
+        }
