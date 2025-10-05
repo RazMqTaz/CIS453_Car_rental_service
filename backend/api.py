@@ -1,19 +1,14 @@
-from fastapi import FastAPI, HTTPException, Query, Depends
+from fastapi import FastAPI, HTTPException, Depends, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Dict, List, Optional
-from datetime import date
 from sqlalchemy.orm import Session
-from .database import get_DB
-from .models import User
+from datetime import date
+from typing import List, Optional
 
-# Import backends classes
-from .user import User
-from .reservation import Reservation
-from .car import Car
-from .admin import Admin  # for future use
+from .database import get_db, init_db
+from . import models
+from . import schemas
 
-app = FastAPI(title="Car Rental API", version="0.1")
+app = FastAPI(title="Car Rental Service API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,226 +18,128 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize DB and seed data on startup
+@app.on_event("startup")
+def on_startup():
+    init_db()
+    db = next(get_db())
+    try:
+        # Seed admin if not present
+        if not db.query(models.User).filter_by(email="admin@example.com").first():
+            admin = models.User(
+                name="Admin",
+                email="admin@example.com",
+                license_number="ADMIN001",
+                password="admin123",  # NOTE: plain text for demo only
+                role="admin",
+            )
+            db.add(admin)
+        # Seed cars if table empty
+        if db.query(models.Car).count() == 0:
+            seed_cars = [
+                dict(make="Toyota", model="Corolla", year=2021, color="White", license_plate="ABC101", vin="VIN101", mileage=12000, fuel_type="Gasoline", status="available", location="Economy"),
+                dict(make="Honda", model="Civic", year=2022, color="Blue", license_plate="ABC102", vin="VIN102", mileage=8000, fuel_type="Gasoline", status="available", location="Sedan"),
+                dict(make="Tesla", model="Model 3", year=2023, color="Red", license_plate="EV303", vin="VIN303", mileage=5000, fuel_type="Electric", status="available", location="EV"),
+                dict(make="Ford", model="Escape", year=2020, color="Gray", license_plate="SUV404", vin="VIN404", mileage=25000, fuel_type="Gasoline", status="available", location="SUV"),
+            ]
+            for c in seed_cars:
+                db.add(models.Car(**c))
+        db.commit()
+    finally:
+        db.close()
 
-# In memory stores (prototype)
-
-
-class UserStore:
-    def __init__(self, db: Session):
-        self.db = db
-
-    def register(self, name: str, email: str, license_number: str, password: str) -> User:
-        if self.db.query(User).filter(User.email == email).first():
-            raise ValueError("Email already registered")
-        user = User(name=name, email=email, license_number=license_number, password=password)
-        self.db.add(user)
-        self.db.commit()
-        self.db.refresh(user)
-        return user
-
-    def login(self, email: str, password: str) -> Optional[User]:
-        user = self.db.query(User).filter(User.email == email, User.password == password).first()
-        return user
-
-    def get_by_id(self, user_id: int) -> Optional[User]:
-        return self.db.query(User).filter(User.id == user_id).first()
-
-
-class FleetStore:
-    def __init__(self) -> None:
-        self.cars: Dict[int, Car] = {}
-        self.category: Dict[int, str] = {}
-
-    def add(self, car: Car, category: str) -> None:
-        self.cars[car.id] = car
-        self.category[car.id] = category
-
-    def search(self, q: str = "", category: Optional[str] = None) -> List[Car]:
-        ql = (q or "").strip().lower()
-        out = []
-        for cid, c in self.cars.items():
-            if category and category != "All" and self.category.get(cid) != category:
-                continue
-            hay = f"{c.make} {c.model} {c.year} {cid}".lower()
-            if ql in hay:
-                out.append(c)
-        # stable sort
-        out.sort(key=lambda c: (c.make, c.model, c.year, c.id))
-        return out
-
-    def set_status(self, car_id: int, status: str) -> None:
-        if car_id in self.cars:
-            self.cars[car_id].updateStatus(status)
-
-
-class ReservationStore:
-    def __init__(self) -> None:
-        self.rows: List[Reservation] = []
-
-    def add(self, r: Reservation) -> None:
-        self.rows.append(r)
-
-    def for_user(self, user_id: int) -> List[Reservation]:
-        return [r for r in self.rows if getattr(r, "user_id", None) == user_id]
-
-    def overlaps(self, car_id: int, start: date, end: date) -> bool:
-        for r in self.rows:
-            if r.car_id != car_id:
-                continue
-            try:
-                rs = date.fromisoformat(r.start_date)
-                re = date.fromisoformat(r.end_date)
-            except Exception:
-                # if stored strings aren't ISO, skip overlap
-                continue
-            if not (end < rs or re < start):
-                return True
-        return False
-
-
-FLEET = FleetStore()
-RES = ReservationStore()
-
-
-def seed(db: Session):
-    cars = [
-        {"id": 101, "make": "Toyota", "model": "Corolla", "year": 2021, "status": "available", "location": "Economy"},
-        {"id": 102, "make": "Honda", "model": "Civic", "year": 2022, "status": "available", "location": "Economy"},
-        # Add more cars here
-    ]
-    for car_data in cars:
-        car = Car(**car_data)
-        db.add(car)
+# ----- Auth -----
+@app.post("/api/register", response_model=schemas.UserOut)
+def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    if db.query(models.User).filter_by(email=user.email).first():
+        raise HTTPException(status_code=400, detail="Email already in use")
+    if db.query(models.User).filter_by(license_number=user.license_number).first():
+        raise HTTPException(status_code=400, detail="License already in use")
+    u = models.User(**user.dict(), role="customer")
+    db.add(u)
     db.commit()
+    db.refresh(u)
+    return u
 
+@app.post("/api/login", response_model=schemas.UserOut)
+def login(creds: schemas.LoginIn, db: Session = Depends(get_db)):
+    u = db.query(models.User).filter_by(email=creds.email, password=creds.password).first()
+    if not u:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    return u
 
-# Pydantic I/O models (thin)
-
-
-class RegisterIn(BaseModel):
-    name: str
-    email: str
-    license_number: str
-    password: str
-
-
-class LoginIn(BaseModel):
-    email: str
-    password: str
-
-
-class BookIn(BaseModel):
-    car_id: int
-    user_id: int
-    start_date: str  # "YYYY-MM-DD"
-    end_date: str  # "YYYY-MM-DD"
-
-
-def user_to_dict(u: User) -> Dict[str, object]:
-    uid = getattr(u, "id", getattr(u, "user_id", None))
-    return {
-        "id": uid,
-        "name": getattr(u, "name", ""),
-        "email": getattr(u, "email", ""),
-        "license_number": getattr(u, "license_number", ""),
-    }
-
-
-def car_to_dict(c: Car) -> Dict[str, object]:
-    return {
-        "id": c.id,
-        "make": c.make,
-        "model": c.model,
-        "year": c.year,
-        "status": c.status,
-        "category": FLEET.category.get(c.id, ""),
-    }
-
-
-def res_to_dict(r: Reservation) -> Dict[str, object]:
-    return {
-        "car_id": r.car_id,
-        "vehicle_type": getattr(r, "vehicle_type", ""),
-        "start_date": r.start_date,
-        "end_date": r.end_date,
-        "status": r.status,
-    }
-
-
-# Endpoints
-
-
-@app.post("/api/register")
-def api_register(payload: RegisterIn, db: Session = Depends(get_DB)):
-    user_store = UserStore(db)
-    try:
-        user = user_store.register(
-            payload.name, payload.email, payload.license_number, payload.password
+# ----- Cars -----
+@app.get("/api/cars", response_model=List[schemas.CarOut])
+def list_cars(q: Optional[str] = Query(None), category: Optional[str] = Query(None), db: Session = Depends(get_db)):
+    qs = db.query(models.Car)
+    if category and category not in ("All", ""):
+        qs = qs.filter(models.Car.location == category)
+    if q:
+        like = f"%{q}%"
+        qs = qs.filter(
+            (models.Car.make.ilike(like)) |
+            (models.Car.model.ilike(like)) |
+            (models.Car.license_plate.ilike(like))
         )
-        return {"ok": True, "user": user_to_dict(user)}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    return qs.all()
 
-
-@app.post("/api/login")
-def api_login(payload: LoginIn, db: Session = Depends(get_DB)):
-    user_store = UserStore(db)
-    u = user_store.login(payload.email, payload.password)
-    if not u:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    return {"ok": True, "user": user_to_dict(u)}
-
-
-@app.get("/api/cars")
-def api_cars(q: str = Query(default=""), category: str = Query(default="All")):
-    cars = FLEET.search(q, category)
-    return [car_to_dict(c) for c in cars]
-
-
-@app.post("/api/book")
-def api_book(payload: BookIn):
-    # validate user
-    u = USERS.get_by_id(payload.user_id)
-    if not u:
-        raise HTTPException(status_code=404, detail="User not found")
-    # validate car
-    c = FLEET.cars.get(payload.car_id)
-    if not c:
+# ----- Booking -----
+@app.post("/api/book", response_model=dict)
+def book(req: schemas.BookIn, db: Session = Depends(get_db)):
+    car = db.query(models.Car).filter_by(id=req.car_id).first()
+    if not car:
         raise HTTPException(status_code=404, detail="Car not found")
-    if c.status != "available":
+    if car.status != "available":
         raise HTTPException(status_code=400, detail="Car not available")
-    # check dates
-    try:
-        s = date.fromisoformat(payload.start_date)
-        e = date.fromisoformat(payload.end_date)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid dates")
-    if e < s:
-        raise HTTPException(status_code=400, detail="End date must be >= start date")
-    # overlap check
-    if RES.overlaps(c.id, s, e):
-        raise HTTPException(status_code=409, detail="Overlapping reservation")
-    # create reservation
-    r = Reservation(
-        vehicle_type=FLEET.category.get(c.id, "Unknown"),
-        car_id=c.id,
-        user_id=user_to_dict(u)["id"],  # type: ignore[arg-type]
-        start_date=s.isoformat(),
-        end_date=e.isoformat(),
+
+    # Check overlap
+    overlap = db.query(models.Reservation).filter(
+        models.Reservation.car_id == req.car_id,
+        models.Reservation.end_date >= req.start_date,
+        models.Reservation.start_date <= req.end_date,
+    ).first()
+    if overlap:
+        raise HTTPException(status_code=400, detail="Dates overlap with an existing reservation")
+
+    r = models.Reservation(
+        car_id=req.car_id,
+        user_id=req.user_id,
+        start_date=req.start_date,
+        end_date=req.end_date,
         status="reserved",
     )
-    try:
-        u.add_reservation(r)  # may not exist
-    except Exception:
-        if not hasattr(u, "reservations"):
-            setattr(u, "reservations", [])
-        u.reservations.append(r)  # type: ignore[attr-defined]
-    RES.add(r)
-    FLEET.set_status(c.id, "reserved")
+    db.add(r)
+    car.status = "reserved"
+    db.commit()
     return {"ok": True}
 
+@app.get("/api/my-reservations", response_model=List[schemas.ReservationOut])
+def my_reservations(user_id: int = Query(...), db: Session = Depends(get_db)):
+    rows = db.query(models.Reservation).filter_by(user_id=user_id).all()
+    return rows
 
-@app.get("/api/my-reservations")
-def api_my_reservations(user_id: int = Query(...)):
-    rows = RES.for_user(user_id)
-    return [res_to_dict(r) for r in rows]
+# ----- Admin -----
+@app.get("/api/admin/reservations", response_model=List[schemas.ReservationOut])
+def all_reservations(admin_email: str = Query(...), admin_password: str = Query(...), db: Session = Depends(get_db)):
+    admin = db.query(models.User).filter_by(email=admin_email, password=admin_password, role="admin").first()
+    if not admin:
+        raise HTTPException(status_code=403, detail="Admin credentials required")
+    return db.query(models.Reservation).all()
+
+@app.put("/api/admin/reservations/{res_id}", response_model=schemas.ReservationOut)
+def update_reservation(res_id: int, update: schemas.ReservationUpdate, admin_email: str = Query(...), admin_password: str = Query(...), db: Session = Depends(get_db)):
+    admin = db.query(models.User).filter_by(email=admin_email, password=admin_password, role="admin").first()
+    if not admin:
+        raise HTTPException(status_code=403, detail="Admin credentials required")
+    r = db.query(models.Reservation).filter_by(id=res_id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Reservation not found")
+    if update.start_date is not None:
+        r.start_date = update.start_date
+    if update.end_date is not None:
+        r.end_date = update.end_date
+    if update.status is not None:
+        r.status = update.status
+    db.commit()
+    db.refresh(r)
+    return r

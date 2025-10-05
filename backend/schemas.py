@@ -1,6 +1,8 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr
 from typing import Optional
+from datetime import date
 
+# ---- Cars ----
 class CarBase(BaseModel):
     make: str
     model: str
@@ -13,11 +15,10 @@ class CarBase(BaseModel):
     status: str = "available"
     location: str = "Main"
 
-class CarCreate(CarBase): #looks redundant, but if we decide to to change rules we can do it from here without unintentionally breaking shit
+class CarCreate(CarBase):
     pass
 
 class CarUpdate(BaseModel):
-    # fields are all optional so the client can send partial updates to make it easier for them
     make: Optional[str] = None
     model: Optional[str] = None
     year: Optional[int] = None
@@ -31,4 +32,44 @@ class CarUpdate(BaseModel):
 
 class CarOut(CarBase):
     id: int
-    model_config: ConfigDict(from_attributes=True) # pydantic v2: enables ORM output
+    model_config = ConfigDict(from_attributes=True)
+
+# ---- Users ----
+class UserCreate(BaseModel):
+    name: str
+    email: EmailStr
+    license_number: str
+    password: str
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+class UserOut(BaseModel):
+    id: int
+    name: str
+    email: EmailStr
+    license_number: str
+    role: str
+    model_config = ConfigDict(from_attributes=True)
+
+# ---- Reservations ----
+class BookIn(BaseModel):
+    car_id: int
+    user_id: int
+    start_date: date
+    end_date: date
+
+class ReservationOut(BaseModel):
+    id: int
+    car_id: int
+    user_id: int
+    start_date: date
+    end_date: date
+    status: str
+    model_config = ConfigDict(from_attributes=True)
+
+class ReservationUpdate(BaseModel):
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    status: Optional[str] = None
