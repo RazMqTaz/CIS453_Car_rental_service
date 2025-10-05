@@ -53,7 +53,8 @@ else:
         if st.button("Sign in"):
             out = api_post("/api/login", {"email": si_email.strip(), "password": si_pw})
             if out:
-                st.session_state.user = out.get("user")
+                # Save entire user object returned by API
+                st.session_state.user = out
                 st.rerun()
     with col2:
         st.caption("Register")
@@ -72,7 +73,8 @@ else:
                 },
             )
             if out:
-                st.session_state.user = out.get("user")
+                # Save entire user object returned by API
+                st.session_state.user = out
                 st.rerun()
 
 st.divider()
@@ -83,7 +85,7 @@ col1, col2 = st.columns([4, 2])
 with col1:
     q = st.text_input("Search (make, model, year, ID)", key="q")
 with col2:
-    category = st.selectbox("Category", ["All", "Economy", "Sedan", "SUV"], index=0)
+    category = st.selectbox("Category", ["All", "Economy", "Sedan", "SUV", "EV"], index=0)
 
 cars = api_get("/api/cars", {"q": q, "category": category})
 if cars:
@@ -94,7 +96,7 @@ if cars:
                 "Make": c["make"],
                 "Model": c["model"],
                 "Year": c["year"],
-                "Category": c.get("category", ""),
+                "Location": c.get("location", ""),  # backend field name
                 "Status": c["status"],
             }
             for c in cars
@@ -120,9 +122,7 @@ else:
     else:
         today = date.today()
         start = st.date_input("Start date", value=today)
-        end = st.date_input(
-            "End date", value=today + timedelta(days=2), min_value=start
-        )
+        end = st.date_input("End date", value=today + timedelta(days=2), min_value=start)
         if st.button("Confirm booking"):
             out = api_post(
                 "/api/book",
@@ -150,8 +150,8 @@ else:
         st.table(
             [
                 {
+                    "Reservation": r["id"],
                     "Car ID": r["car_id"],
-                    "Type": r.get("vehicle_type", ""),
                     "Start": r["start_date"],
                     "End": r["end_date"],
                     "Status": r["status"],
@@ -161,3 +161,55 @@ else:
         )
     else:
         st.caption("None.")
+
+st.divider()
+st.subheader("Admin")
+
+with st.expander("Admin Login", expanded=False):
+    a_email = st.text_input("Admin Email", value="admin@example.com", key="admin_email")
+    a_pw = st.text_input("Admin Password", type="password", value="admin123", key="admin_pw")
+    if st.button("Load All Reservations"):
+        try:
+            r = requests.get(
+                f"{BASE_URL}/api/admin/reservations",
+                params={"admin_email": a_email, "admin_password": a_pw},
+                timeout=10,
+            )
+            r.raise_for_status()
+            st.session_state["admin_rows"] = r.json()
+            st.success("Loaded reservations.")
+        except Exception as e:
+            st.error(f"Failed to load: {e}")
+
+rows = st.session_state.get("admin_rows", [])
+if rows:
+    st.table(
+        [
+            {
+                "ID": r["id"],
+                "Car": r["car_id"],
+                "User": r["user_id"],
+                "Start": r["start_date"],
+                "End": r["end_date"],
+                "Status": r["status"],
+            }
+            for r in rows
+        ]
+    )
+    st.caption("Select a reservation to update:")
+    sel_id = st.selectbox("Reservation ID", options=[r["id"] for r in rows], index=0)
+    new_status = st.selectbox("Status", options=["reserved", "active", "completed", "cancelled"])
+    if st.button("Update Status"):
+        try:
+            r = requests.put(
+                f"{BASE_URL}/api/admin/reservations/{sel_id}",
+                params={"admin_email": a_email, "admin_password": a_pw},
+                json={"status": new_status},
+                timeout=10,
+            )
+            r.raise_for_status()
+            st.success("Updated.")
+        except Exception as e:
+            st.error(f"Failed to update: {e}")
+else:
+    st.caption("No admin data loaded.")
