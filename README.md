@@ -12,6 +12,10 @@ pip install streamlit requests
 streamlit run frontend/streamlit.py
 ```
 
+## Admin Login
+Email: admin@example.com
+Password: admin123
+
 ## Features (Week 3)
 - Register / Login
 - View cars
